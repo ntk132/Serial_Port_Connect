@@ -10,6 +10,7 @@ using System.Windows.Forms;
 using System.IO;
 using System.IO.Ports;
 using System.Diagnostics;
+using System.Management;
 
 namespace Bluetooth
 {
@@ -35,6 +36,23 @@ namespace Bluetooth
             timer.Interval = 1000; // 1 giây      
 
             _serialPort.DataReceived += _serialPort_DataReceived;
+
+            initListFileName();
+        }
+
+        private void initListFileName()
+        {
+            DirectoryInfo dic = new DirectoryInfo(_path);
+            List<string> listName = new List<string>();
+            BindingSource bs = new BindingSource();
+
+            foreach (FileInfo file in dic.GetFiles())
+            {
+                listName.Add(file.Name);
+            }
+
+            bs.DataSource = listName;
+            cbCollect.DataSource = bs;
         }
 
         void _serialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
@@ -51,7 +69,17 @@ namespace Bluetooth
         private void frmMain_Load(object sender, EventArgs e)
         {
             // Quét các cổng đang kết nối với PC.
-            cbName.DataSource = SerialPort.GetPortNames();
+            string[] nameDevice = SerialPort.GetPortNames();
+
+            int index = 0;
+
+            foreach (myCOMName portCOM in myCOMName.getName())
+            {
+                nameDevice[index++] += " - " + portCOM.name;
+            }
+
+            // Hiển thị lên danh sách các cổng COM - tên device.
+            cbName.DataSource = nameDevice;
         }
 
         private void btConnectControl_Click(object sender, EventArgs e)
@@ -75,24 +103,24 @@ namespace Bluetooth
                     btConnectControl.Text = "Ngắt kết nối";
 
                     time = DateTime.Now;
-                    tbDataReading.Text += time + Environment.NewLine;
+                    tbDataReading.Text = time + Environment.NewLine;
                 }
                 catch(Exception)
                 {
                     lbState.ForeColor = Color.Red;
                     lbState.Text = "Không thể kết nối";
-                }                
+                }
             }
             else if (_serialPort.IsOpen)
             {
                 // Đóng kết nối nếu đang kết nối
                 _serialPort.Close();
 
+                tbDataReading.Text += DateTime.Now + Environment.NewLine;
+
                 lbState.ForeColor = Color.Red;
                 lbState.Text = "Đã ngắt kết nối";
                 btConnectControl.Text = "Kết nối";
-
-                tbDataReading.Text += DateTime.Now + Environment.NewLine;
             }
         }
 
@@ -133,14 +161,18 @@ namespace Bluetooth
 
         private void btShow_Click(object sender, EventArgs e)
         {
-            DirectoryInfo dic = new DirectoryInfo(@"E:\data");
-
-            // Duyet qua tung file txt de lay ra du lieu
-            foreach (FileInfo file in dic.GetFiles())
+            if (cbCollect.Text == String.Empty)
             {
-                // Doc du lieu ra tu file txt
-                getSourceData(File.ReadAllLines(file.FullName));
+                MessageBox.Show("Chưa chọn file để biểu diễn đồ thị!");
+
+                return;
             }
+                
+
+            FileInfo file = new FileInfo(Path.Combine(_path, cbCollect.Text));
+
+            // Doc du lieu ra tu file txt
+            getSourceData(File.ReadAllLines(file.FullName));
 
             tb.Text = tembuf;
             string[] tem = tb.Lines;
@@ -199,7 +231,7 @@ namespace Bluetooth
          */
         private void getSourceData(string[] data)
         {
-            bool isTemp = true;
+            bool isTemp = true, exit = false;
             int i, j;
 
             for (i = 0; i < data.Length; i++)
@@ -211,9 +243,16 @@ namespace Bluetooth
                         // This is time line
                         // go to next line
                         i++;
+
+                        if (i >= data.Length)
+                            exit = true;
+
                         break;
                     }
                 }
+
+                if (exit)
+                    break;
 
                 for (j = 0; j < data[i].Length; j++)
                 {
@@ -267,6 +306,13 @@ namespace Bluetooth
             //Xu li chuoi de tao ten file luu du lieu
             string temp = time.ToString().Replace(":", "_").Replace("/", "_");
             string pathFileNow = Path.Combine(_path, temp + ".txt");
+            time = DateTime.Now;
+
+            if (lbState.Text == "Đang kết nối")
+            {
+                tbDataReading.Text += time;
+            }
+            
 
             if (File.Exists(pathFileNow))
             {
@@ -275,20 +321,109 @@ namespace Bluetooth
             }
 
             // Luu du lieu vao file vua tao
-            tbDataReading.Lines[0] = null;
             string data = tbDataReading.Text;
             File.WriteAllText(pathFileNow, data);
 
             // Clear man hinh hien thi, chuan bi nhan du lieu moi
             tbDataReading.Clear();
-            time = DateTime.Now;
-            tbDataReading.Text = time.ToString();
+            tbDataReading.Text = time.ToString() + Environment.NewLine;
         }
 
         // Mo folder chua cac file nguon luu tru nhiet do va do am thu duoc
         private void btOpenFolderSource_Click(object sender, EventArgs e)
         {
             Process.Start(@"E:\data");
+        }
+
+        /*
+        internal class ProcessConnection
+        {
+            public static ConnectionOptions ProcessConnectionOptions()
+            {
+                ConnectionOptions options = new ConnectionOptions();
+                options.Impersonation = ImpersonationLevel.Impersonate;
+                options.Authentication = AuthenticationLevel.Default;
+                options.EnablePrivileges = true;
+                return options;
+            }
+
+            public static ManagementScope ConnectionScope(string machineName, ConnectionOptions options, string path)
+            {
+                ManagementScope connectScope = new ManagementScope();
+                connectScope.Path = new ManagementPath(@"\\" + machineName + path);
+                connectScope.Options = options;
+                connectScope.Connect();
+                return connectScope;
+            }
+        }
+
+        public class COMPortInfo
+        {
+            public string Name { get; set; }
+            public string Description { get; set; }
+
+            public COMPortInfo() { }
+
+            public static List<COMPortInfo> GetCOMPortsInfo()
+            {
+                List<COMPortInfo> comPortInfoList = new List<COMPortInfo>();
+
+                ConnectionOptions options = ProcessConnection.ProcessConnectionOptions();
+                ManagementScope connectionScope = ProcessConnection.ConnectionScope(Environment.MachineName, options, @"\root\CIMV2");
+
+                ObjectQuery objectQuery = new ObjectQuery("SELECT * FROM Win32_PnPEntity WHERE ConfigManagerErrorCode = 0");
+                ManagementObjectSearcher comPortSearcher = new ManagementObjectSearcher(connectionScope, objectQuery);
+
+                using (comPortSearcher)
+                {
+                    string caption = null;
+                    foreach (ManagementObject obj in comPortSearcher.Get())
+                    {
+                        if (obj != null)
+                        {
+                            object captionObj = obj["Caption"];
+                            if (captionObj != null)
+                            {
+                                caption = captionObj.ToString();
+                                if (caption.Contains("(COM"))
+                                {
+                                    COMPortInfo comPortInfo = new COMPortInfo();
+                                    comPortInfo.Name = caption.Substring(caption.LastIndexOf("(COM")).Replace("(", string.Empty).Replace(")", string.Empty);
+                                    comPortInfo.Description = caption;
+                                    comPortInfoList.Add(comPortInfo);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return comPortInfoList;
+            }
+        }
+        */
+
+        public class myCOMName
+        {
+            public string name { get; set; }
+
+            public myCOMName() { }
+
+            public static List<myCOMName> getName()
+            {
+                List<myCOMName> list = new List<myCOMName>();
+                ManagementObjectSearcher _searcher = new ManagementObjectSearcher("select * from Win32_SerialPort");
+
+                foreach (ManagementObject _usb in _searcher.Get())
+                {
+                    myCOMName com = new myCOMName();
+
+                    com.name = _usb["Caption"].ToString();
+
+                    list.Add(com);
+                }
+
+                return list;
+            }
         }
     }
 }
